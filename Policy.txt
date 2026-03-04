@@ -1,0 +1,494 @@
+//
+//  PermanentRecord
+//
+//  Created by Demphi on 2026/3/4.
+//
+
+Option Explicit
+
+' ==================================================================================
+' 1. 平均定投买入 (ConfirmEqualBuy)
+' 升级点：买入资金会分别加到 H2-H5 的分项本金中
+' ==================================================================================
+Sub ConfirmEqualBuy()
+    Dim wsDash As Worksheet
+    Dim newFundCell As Range
+    Dim totalInvest As Double
+    Dim t(1 To 4) As Double, buy(1 To 4) As Double
+    Dim i As Integer
+    
+    Set wsDash = ThisWorkbook.Sheets("Dashboard")
+    Set newFundCell = wsDash.Range("K1") ' 新增资金
+    
+    totalInvest = newFundCell.Value
+    If totalInvest <= 0 Then Exit Sub
+    
+    ' 读取目标比例 (J4, J5, K4, K5)
+    t(1) = wsDash.Range("J4").Value ' 股票%
+    t(2) = wsDash.Range("J5").Value ' 债券%
+    t(3) = wsDash.Range("K4").Value ' 黄金%
+    t(4) = wsDash.Range("K5").Value ' 现金%
+    
+    ' 计算每份金额
+    For i = 1 To 4
+        buy(i) = totalInvest * t(i)
+    Next i
+    
+    If MsgBox("确认执行【按比买入】？" & vbCrLf & _
+              "------------------------------" & vbCrLf & _
+              "股票: " & Format(buy(1), "0.00") & vbCrLf & _
+              "债券: " & Format(buy(2), "0.00") & vbCrLf & _
+              "黄金: " & Format(buy(3), "0.00") & vbCrLf & _
+              "现金: " & Format(buy(4), "0.00"), vbQuestion + vbYesNo, "定投确认") = vbNo Then
+        Exit Sub
+    End If
+    
+    ' === 核心更新 ===
+    ' 1. 更新市值 D2-D5
+    ' 2. 更新本金 H2-H5
+    For i = 1 To 4
+        wsDash.Range("D" & (1 + i)).Value = wsDash.Range("D" & (1 + i)).Value + buy(i)
+        wsDash.Range("H" & (1 + i)).Value = wsDash.Range("H" & (1 + i)).Value + buy(i)
+    Next i
+    
+    ' 更新总本金 H6 (为了防止公式没设，脚本也写一次)
+    wsDash.Range("H6").Value = Application.WorksheetFunction.Sum(wsDash.Range("H2:H5"))
+    
+    newFundCell.Value = 0
+    MsgBox "√ 定投已完成！本金已分项更新。", vbInformation
+End Sub
+
+' ==================================================================================
+' 2. 智能填坑买入/削峰卖出 (ConfirmSmartInjection)
+' 升级点：填坑/削峰的金额会精准更新到对应资产的本金里
+' ==================================================================================
+Sub ConfirmSmartInjection()
+    Dim wsDash As Worksheet
+    Dim newFund As Double
+    Dim cur(1 To 4) As Double, targetPct(1 To 4) As Double, gap(1 To 4) As Double
+    Dim finalAdj(1 To 4) As Double
+    Dim futureTotal As Double, futureTargetAmt As Double
+    Dim i As Integer
+    Dim totalGap As Double
+    
+    Set wsDash = ThisWorkbook.Sheets("Dashboard")
+    newFund = wsDash.Range("K1").Value
+    If newFund = 0 Then Exit Sub
+    
+    ' 读取数据 D2-D5
+    For i = 1 To 4
+        cur(i) = wsDash.Range("D" & (1 + i)).Value
+    Next i
+    
+    ' 读取目标比例 J4,J5,K4,K5
+    targetPct(1) = wsDash.Range("J4").Value
+    targetPct(2) = wsDash.Range("J5").Value
+    targetPct(3) = wsDash.Range("K4").Value
+    targetPct(4) = wsDash.Range("K5").Value
+    
+    futureTotal = Application.WorksheetFunction.Sum(cur) + newFund
+    
+    ' 计算缺口
+    For i = 1 To 4
+        futureTargetAmt = futureTotal * targetPct(i)
+        gap(i) = futureTargetAmt - cur(i)
+    Next i
+    
+    ' === 算法分支 (保持原有逻辑不变) ===
+    If newFund > 0 Then
+        ' 存钱逻辑
+        totalGap = 0
+        For i = 1 To 4
+            If gap(i) > 0 Then totalGap = totalGap + gap(i)
+        Next i
+        
+        If newFund >= totalGap Then
+            Dim surplus As Double
+            surplus = newFund - totalGap
+            For i = 1 To 4
+                If gap(i) > 0 Then
+                    finalAdj(i) = gap(i) + (surplus * targetPct(i))
+                Else
+                    finalAdj(i) = 0 + (surplus * targetPct(i))
+                End If
+            Next i
+        Else
+            For i = 1 To 4
+                If gap(i) > 0 Then
+                    finalAdj(i) = newFund * (gap(i) / totalGap)
+                Else
+                    finalAdj(i) = 0
+                End If
+            Next i
+        End If
+    Else
+        ' 取钱逻辑
+        Dim absFund As Double
+        absFund = Abs(newFund)
+        totalGap = 0
+        For i = 1 To 4
+            If gap(i) < 0 Then totalGap = totalGap + Abs(gap(i))
+        Next i
+        
+        If absFund >= totalGap Then
+            Dim remainder As Double
+            remainder = absFund - totalGap
+            For i = 1 To 4
+                If gap(i) < 0 Then
+                    finalAdj(i) = gap(i) - (remainder * targetPct(i))
+                Else
+                    finalAdj(i) = -(remainder * targetPct(i))
+                End If
+            Next i
+        Else
+            For i = 1 To 4
+                If gap(i) < 0 Then
+                    finalAdj(i) = newFund * (Abs(gap(i)) / totalGap)
+                Else
+                    finalAdj(i) = 0
+                End If
+            Next i
+        End If
+    End If
+    
+    If MsgBox("确认执行【智能操作】？" & vbCrLf & _
+              "------------------------------" & vbCrLf & _
+              "股票: " & Format(finalAdj(1), "0.00") & vbCrLf & _
+              "债券: " & Format(finalAdj(2), "0.00") & vbCrLf & _
+              "黄金: " & Format(finalAdj(3), "0.00") & vbCrLf & _
+              "现金: " & Format(finalAdj(4), "0.00"), vbQuestion + vbYesNo, "智能操作") = vbNo Then
+        Exit Sub
+    End If
+    
+    ' === 核心更新 ===
+    ' 更新市值 D2-D5 和 本金 H2-H5
+    For i = 1 To 4
+        wsDash.Range("D" & (1 + i)).Value = wsDash.Range("D" & (1 + i)).Value + finalAdj(i)
+        wsDash.Range("H" & (1 + i)).Value = wsDash.Range("H" & (1 + i)).Value + finalAdj(i)
+    Next i
+    
+    ' 更新总本金 H6
+    wsDash.Range("H6").Value = Application.WorksheetFunction.Sum(wsDash.Range("H2:H5"))
+    
+    wsDash.Range("K1").Value = 0
+    MsgBox "√ 智能操作完成！分项本金已更新。", vbInformation
+
+End Sub
+
+' ==================================================================================
+' 3. 执行强制再平衡 (ExecuteFullRebalance)
+' 升级点：再平衡涉及资金挪动，必须同步调整分项本金！
+' 例如：卖出股票1000买入债券1000 -> 股票本金-1000，债券本金+1000
+' ==================================================================================
+Sub ExecuteFullRebalance()
+    Dim wsDash As Worksheet
+    Dim cur(1 To 4) As Double, targetPct(1 To 4) As Double
+    Dim targetAmt(1 To 4) As Double, diff(1 To 4) As Double
+    Dim totalAssets As Double
+    Dim i As Integer
+    Dim confirmMsg As String
+    
+    Set wsDash = ThisWorkbook.Sheets("Dashboard")
+    
+    ' 读取当前市值 D2-D5
+    For i = 1 To 4
+        cur(i) = wsDash.Range("D" & (1 + i)).Value
+    Next i
+    
+    ' 读取目标比例
+    targetPct(1) = wsDash.Range("J4").Value
+    targetPct(2) = wsDash.Range("J5").Value
+    targetPct(3) = wsDash.Range("K4").Value
+    targetPct(4) = wsDash.Range("K5").Value
+    
+    totalAssets = Application.WorksheetFunction.Sum(cur)
+    
+    confirmMsg = "△ 警告：强制再平衡将调整分项本金！" & vbCrLf & _
+                 "------------------------------" & vbCrLf
+                 
+    For i = 1 To 4
+        targetAmt(i) = totalAssets * targetPct(i)
+        diff(i) = targetAmt(i) - cur(i)
+    Next i
+    
+    confirmMsg = confirmMsg & _
+                 "股票: " & Format(diff(1), "0.00") & vbCrLf & _
+                 "债券: " & Format(diff(2), "0.00") & vbCrLf & _
+                 "黄金: " & Format(diff(3), "0.00") & vbCrLf & _
+                 "现金: " & Format(diff(4), "0.00")
+    
+    If MsgBox(confirmMsg, vbExclamation + vbYesNo, "执行强制再平衡") = vbNo Then
+        Exit Sub
+    End If
+    
+    ' === 核心更新 ===
+    ' 更新市值 和 本金 (本金随资金流动而变化)
+    For i = 1 To 4
+        wsDash.Range("D" & (1 + i)).Value = targetAmt(i)
+        wsDash.Range("H" & (1 + i)).Value = wsDash.Range("H" & (1 + i)).Value + diff(i)
+    Next i
+    
+    ' 总本金 H6 理论上不变，但刷新一下以防万一
+    wsDash.Range("H6").Value = Application.WorksheetFunction.Sum(wsDash.Range("H2:H5"))
+    
+    MsgBox "√ 再平衡已完成！分项本金已重新分配。", vbInformation
+
+End Sub
+
+
+' ==========================================
+' 4. 智能买卖决策 (SmartAutoTrade) - 终极修复版
+' 核心逻辑：
+' 1. 计算总偏差阈值 (Theta * 总资产)
+' 2. 决策分支：
+'    - 资金 > 阈值 -> 按比例买入/卖出 (保留动量，并在弹窗显示目标比例)
+'    - 资金 < 阈值 -> 填坑买入/削峰卖出 (修补短板)
+' 3. 记账更新：
+'    - 同时更新 D2-D5 (市值) 和 H2-H5 (分项本金)
+' ==========================================
+Sub SmartAutoTrade()
+    Dim wsDash As Worksheet
+    Dim newFund As Double, absFund As Double
+    Dim cur(1 To 4) As Double, targetPct(1 To 4) As Double
+    Dim curPct(1 To 4) As Double
+    Dim totalCur As Double, theta As Double
+    Dim threshold As Double
+    Dim i As Integer
+    Dim strategyName As String
+    
+    ' 变量用于计算
+    Dim finalAdj(1 To 4) As Double
+    Dim futureTotal As Double
+    Dim gap(1 To 4) As Double
+    Dim totalGap As Double
+    
+    Set wsDash = ThisWorkbook.Sheets("Dashboard")
+    newFund = wsDash.Range("K1").Value ' 读取资金
+    
+    ' 1. 安全检查
+    If newFund = 0 Then
+        MsgBox "?? 资金为 0，无法执行操作。", vbExclamation
+        Exit Sub
+    End If
+    
+    absFund = Abs(newFund)
+    
+    ' 2. 读取数据 (市值 D2-D5)
+    For i = 1 To 4
+        cur(i) = wsDash.Range("D" & (1 + i)).Value
+    Next i
+    
+    ' 读取目标比例 (J4, J5, K4, K5)
+    ' 请确认您的 Excel 里比例确实填在这几个格子里
+    targetPct(1) = wsDash.Range("J4").Value
+    targetPct(2) = wsDash.Range("J5").Value
+    targetPct(3) = wsDash.Range("K4").Value
+    targetPct(4) = wsDash.Range("K5").Value
+    
+    totalCur = Application.WorksheetFunction.Sum(cur)
+    
+    ' 3. 计算 Theta (偏差率绝对值之和)
+    theta = 0
+    For i = 1 To 4
+        If totalCur > 0 Then
+            curPct(i) = cur(i) / totalCur
+        Else
+            curPct(i) = 0
+        End If
+        theta = theta + Abs(curPct(i) - targetPct(i))
+    Next i
+    
+    ' 4. 计算决策阈值
+    threshold = totalCur * theta
+    
+    ' ==============================================================================
+    ' 分支 A: 存钱逻辑 (NewFund > 0)
+    ' ==============================================================================
+    If newFund > 0 Then
+        If newFund > threshold Then
+            ' --- 策略 A1: 大额存入 -> 按比例平均买入 ---
+            strategyName = "?? 存入金额大 (" & Format(newFund, "#,##0") & " > " & Format(threshold, "#,##0") & ")" & vbCrLf & "?? 策略：按比例平均买入 (保留比例)"
+            For i = 1 To 4
+                finalAdj(i) = newFund * targetPct(i)
+            Next i
+        Else
+            ' --- 策略 A2: 小额存入 -> 智能填坑 ---
+            strategyName = "?? 存入金额小 (" & Format(newFund, "#,##0") & " <= " & Format(threshold, "#,##0") & ")" & vbCrLf & "?? 策略：优先填坑 (买入洼地)"
+            futureTotal = totalCur + newFund
+            totalGap = 0
+            
+            For i = 1 To 4
+                gap(i) = (futureTotal * targetPct(i)) - cur(i)
+                If gap(i) > 0 Then totalGap = totalGap + gap(i)
+            Next i
+            
+            If newFund >= totalGap Then
+                Dim surplusBuy As Double
+                surplusBuy = newFund - totalGap
+                For i = 1 To 4
+                    If gap(i) > 0 Then
+                        finalAdj(i) = gap(i) + (surplusBuy * targetPct(i))
+                    Else
+                        finalAdj(i) = 0 + (surplusBuy * targetPct(i))
+                    End If
+                Next i
+            Else
+                For i = 1 To 4
+                    If gap(i) > 0 Then
+                        finalAdj(i) = newFund * (gap(i) / totalGap)
+                    Else
+                        finalAdj(i) = 0
+                    End If
+                Next i
+            End If
+        End If
+
+    ' ==============================================================================
+    ' 分支 B: 取钱逻辑 (NewFund < 0)
+    ' ==============================================================================
+    Else
+        If absFund > threshold Then
+            ' --- 策略 B1: 大额取出 -> 按比例平均卖出 ---
+            strategyName = "?? 取出金额大 (" & Format(absFund, "#,##0") & " > " & Format(threshold, "#,##0") & ")" & vbCrLf & "?? 策略：按比例平均卖出 (整体缩减)"
+            For i = 1 To 4
+                finalAdj(i) = newFund * targetPct(i)
+            Next i
+        Else
+            ' --- 策略 B2: 小额取出 -> 智能削峰 ---
+            strategyName = "?? 取出金额小 (" & Format(absFund, "#,##0") & " <= " & Format(threshold, "#,##0") & ")" & vbCrLf & "?? 策略：优先削峰 (卖出高地)"
+            futureTotal = totalCur + newFund
+            totalGap = 0
+            
+            For i = 1 To 4
+                gap(i) = (futureTotal * targetPct(i)) - cur(i)
+                If gap(i) < 0 Then totalGap = totalGap + Abs(gap(i))
+            Next i
+            
+            If absFund >= totalGap Then
+                Dim surplusSell As Double
+                surplusSell = absFund - totalGap
+                For i = 1 To 4
+                    If gap(i) < 0 Then
+                        finalAdj(i) = gap(i) - (surplusSell * targetPct(i))
+                    Else
+                        finalAdj(i) = 0 - (surplusSell * targetPct(i))
+                    End If
+                Next i
+            Else
+                For i = 1 To 4
+                    If gap(i) < 0 Then
+                        finalAdj(i) = newFund * (Abs(gap(i)) / totalGap)
+                    Else
+                        finalAdj(i) = 0
+                    End If
+                Next i
+            End If
+        End If
+    End If
+    
+    ' 6. 弹窗确认 (已添加比例显示)
+    If MsgBox("【智能决策分析报告】" & vbCrLf & _
+              "------------------------------" & vbCrLf & _
+              "当前总偏离度 (Theta): " & Format(theta, "0.00%") & vbCrLf & _
+              "决策阈值 (资产*Theta): " & Format(threshold, "#,##0.00") & vbCrLf & _
+              "本次变动: " & Format(newFund, "#,##0.00") & vbCrLf & _
+              "------------------------------" & vbCrLf & _
+              "?? " & strategyName & vbCrLf & _
+              "------------------------------" & vbCrLf & _
+              "股票 (" & Format(targetPct(1), "0%") & "): " & Format(finalAdj(1), "0.00") & vbCrLf & _
+              "债券 (" & Format(targetPct(2), "0%") & "): " & Format(finalAdj(2), "0.00") & vbCrLf & _
+              "黄金 (" & Format(targetPct(3), "0%") & "): " & Format(finalAdj(3), "0.00") & vbCrLf & _
+              "现金 (" & Format(targetPct(4), "0%") & "): " & Format(finalAdj(4), "0.00"), vbQuestion + vbYesNo, "智能买卖执行") = vbNo Then
+        Exit Sub
+    End If
+    
+    ' 7. 执行更新 (核心修正点)
+    ' 循环更新每一项资产的 市值(D列) 和 本金(H列)
+    For i = 1 To 4
+        ' 更新市值 D2-D5
+        wsDash.Range("D" & (1 + i)).Value = wsDash.Range("D" & (1 + i)).Value + finalAdj(i)
+        
+        ' 更新分项本金 H2-H5 (关键！此处修复了之前的漏洞)
+        wsDash.Range("H" & (1 + i)).Value = wsDash.Range("H" & (1 + i)).Value + finalAdj(i)
+    Next i
+    
+    ' 清零输入
+    wsDash.Range("K1").Value = 0
+    
+    MsgBox "√ 交易已完成！市值与分项本金均已更新。", vbInformation
+
+End Sub
+' ==================================================================================
+' 5. 记录历史数据 (RecordData)
+' 升级点：大幅扩容！记录分项本金 + 计算分项收益率
+' ==================================================================================
+Sub RecordData()
+    Dim wsDash As Worksheet
+    Dim wsHist As Worksheet
+    Dim nextRow As Long
+    Dim i As Integer
+    Dim val As Double, cost As Double
+    
+    Set wsDash = ThisWorkbook.Sheets("Dashboard")
+    Set wsHist = ThisWorkbook.Sheets("History")
+    
+    nextRow = wsHist.Cells(wsHist.Rows.Count, "A").End(xlUp).Row + 1
+    
+    ' 1. 日期 (A列)
+    wsHist.Cells(nextRow, 1).Value = Date
+    
+    ' 2. 市值 (B-E列: 股, 债, 金, 钱)
+    wsHist.Cells(nextRow, 2).Value = wsDash.Range("D2").Value
+    wsHist.Cells(nextRow, 3).Value = wsDash.Range("D3").Value
+    wsHist.Cells(nextRow, 4).Value = wsDash.Range("D4").Value
+    wsHist.Cells(nextRow, 5).Value = wsDash.Range("D5").Value
+    
+    ' 3. 总市值 (F列)
+    wsHist.Cells(nextRow, 6).Value = wsDash.Range("D6").Value
+    
+    ' 4. [新增] 分项本金 (G-J列: 股, 债, 金, 钱)
+    wsHist.Cells(nextRow, 7).Value = wsDash.Range("H2").Value
+    wsHist.Cells(nextRow, 8).Value = wsDash.Range("H3").Value
+    wsHist.Cells(nextRow, 9).Value = wsDash.Range("H4").Value
+    wsHist.Cells(nextRow, 10).Value = wsDash.Range("H5").Value
+    
+    ' 5. 总本金 (K列)
+    wsHist.Cells(nextRow, 11).Value = wsDash.Range("H6").Value
+    
+    ' 6. [新增] 分项收益率 (L-O列)
+    ' 公式：(当前市值 - 本金) / 本金
+    For i = 1 To 4
+        val = wsDash.Range("D" & (1 + i)).Value
+        cost = wsDash.Range("H" & (1 + i)).Value
+        
+        If cost <> 0 Then
+            wsHist.Cells(nextRow, 11 + i).Value = (val - cost) / cost
+        Else
+            wsHist.Cells(nextRow, 11 + i).Value = 0
+        End If
+        wsHist.Cells(nextRow, 11 + i).NumberFormat = "0.00%" ' 设为百分比
+    Next i
+    
+    ' 7. 总收益率 (P列)
+    Dim totalVal As Double, totalCost As Double
+    totalVal = wsDash.Range("D6").Value
+    totalCost = wsDash.Range("H6").Value
+    If totalCost <> 0 Then
+        wsHist.Cells(nextRow, 16).Value = (totalVal - totalCost) / totalCost
+    Else
+        wsHist.Cells(nextRow, 16).Value = 0
+    End If
+    wsHist.Cells(nextRow, 16).NumberFormat = "0.00%"
+    
+    ' 8. 备注 (Q列) - 检查状态监测
+    ' 假设状态监测在 G2-G5
+    If InStr(wsDash.Range("G2").Value, "触发") > 0 Or _
+       InStr(wsDash.Range("G3").Value, "触发") > 0 Or _
+       InStr(wsDash.Range("G4").Value, "触发") > 0 Or _
+       InStr(wsDash.Range("G5").Value, "触发") > 0 Then
+        wsHist.Cells(nextRow, 17).Value = InputBox("?? 检测到需要再平衡，请填写今日操作备注：", "留痕")
+    End If
+    
+    MsgBox "√ 数据已归档！包含分项本金与收益率。", vbInformation
+End Sub
+
